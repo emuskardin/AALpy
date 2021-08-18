@@ -1,7 +1,7 @@
 import os
 
 from pydot import Dot, Node, Edge, graph_from_dot_file
-
+from graphviz import Source
 from aalpy.automata import Dfa, MooreMachine, Mdp, Onfsm, MealyState, DfaState, MooreState, MealyMachine, \
     MdpState, StochasticMealyMachine, StochasticMealyState, OnfsmState
 
@@ -116,23 +116,12 @@ def save_automaton_to_file(automaton, path="LearnedModel", file_type='dot',
 
     if file_type == 'string':
         return graph.to_string()
-    elif file_type == 'dot':
-        graph.write(path=f'{path}.dot', format='raw')
     else:
-        try:
-            graph.write(path=f'{path}.{file_type}', format=file_type)
-            print(f'Visualized model saved to {path}.{file_type}.')
-
-            try:
-                import webbrowser
-                abs_path = os.path.abspath(f'{path}.{file_type}')
-                path = f'file:///{abs_path}'
-                webbrowser.open(path)
-            except OSError:
-                pass
-        except OSError:
-            print(f'Could not write to file {path}.{file_type} (Permission denied).'
-                  f'If the file is open, close it and retry.')
+        graph.write(path=f'{path}.dot', format='raw')
+        temp = Source.from_file(f'{path}.dot')
+        s = Source(temp, filename=f"{path}", format=f"{file_type}")
+        print(f'Visualized model saved to {path}.{file_type}.')
+        s.view()
 
 
 def load_automaton_from_file(path, automaton_type, compute_prefixes=False):
