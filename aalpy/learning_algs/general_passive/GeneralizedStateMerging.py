@@ -1,9 +1,9 @@
 import functools
 import time
-from typing import Dict, Tuple, Callable
+from typing import Dict, Tuple, Callable, Union, Optional
 from collections import deque
 
-from aalpy.learning_algs.general_passive.helpers import Node, OutputBehavior, TransitionBehavior, TransitionInfo, \
+from aalpy.learning_algs.general_passive.GsmNode import GsmNode, OutputBehavior, TransitionBehavior, TransitionInfo, \
     OutputBehaviorRange, TransitionBehaviorRange
 from aalpy.learning_algs.general_passive.ScoreFunctionsGSM import ScoreCalculation, NoRareEventNonDetScore, \
     hoeffding_compatibility, Score
@@ -11,131 +11,60 @@ from aalpy.learning_algs.general_passive.ScoreFunctionsGSM import ScoreCalculati
 # TODO make non-mutual exclusive? Easiest done by adding a new method / field to ScoreCalculation
 # future: Only compare futures of states
 # partition: Check compatibility while partition is created
+from aalpy.learning_algs.general_passive.helpers import Partitioning
+from aalpy.learning_algs.general_passive.logger import DebugInfoGSM
+
 CompatibilityBehavior = str
 CompatibilityBehaviorRange = ["future", "partition"]
 
-class Partitioning:
-    def __init__(self, red : Node, blue : Node):
-        self.red : Node = red
-        self.blue : Node = blue
-        self.score : Score = False
-        self.red_mapping : Dict[Node, Node] = dict()
-        self.full_mapping : Dict[Node, Node] = dict()
-
-class DebugInfo:
-    def __init__(self, lvl):
-        self.lvl = lvl
-
-    @staticmethod
-    def min_lvl(lvl):
-        def decorator(fn):
-            from functools import wraps
-            @wraps(fn)
-            def wrapper(*args, **kw):
-                if args[0].lvl < lvl:
-                    return
-                fn(*args, **kw)
-            return wrapper
-        return decorator
-
-class DebugInfoGSM(DebugInfo):
-    min_lvl = DebugInfo.min_lvl
-
-    def __init__(self, lvl, instance : 'GeneralizedStateMerging'):
-        super().__init__(lvl)
-        if lvl < 1:
-            return
-        self.instance = instance
-        self.log = []
-        self.pta_size = None
-        self.nr_merged_states_total = 0
-        self.nr_merged_states = 0
-        self.nr_red_states = 1
-
-    @min_lvl(1)
-    def pta_construction_done(self, start_time):
-        print(f'PTA Construction Time: {round(time.time() - start_time, 2)}')
-        if self.lvl != 1:
-            states = self.instance.root.get_all_nodes()
-            leafs = [state for state in states if len(state.transitions.keys()) == 0]
-            depth = [state.prefix_length for state in leafs]
-            self.pta_size = len(states)
-            print(f'PTA has {len(states)} states leading to {len(leafs)} leafs')
-            print(f'min / avg / max depth : {min(depth)} / {sum(depth) / len(depth)} / {max(depth)}')
-
-    def print_status(self):
-        print_str = f'\rCurrent automaton size: {self.nr_red_states}'
-        if self.lvl != 1:
-            print_str += f' Merged: {self.nr_merged_states_total} Remaining: {self.pta_size - self.nr_red_states - self.nr_merged_states_total}'
-        print(print_str, end="")
-
-    @min_lvl(1)
-    def log_promote(self, node : Node, red_states):
-        self.log.append(["promote", (node.get_prefix(),)])
-        self.nr_red_states = len(red_states) # could be done incrementally, here for historic reasons
-        self.print_status()
-
-    @min_lvl(1)
-    def log_merge(self, part : Partitioning):
-        self.log.append(["merge", (part.red.get_prefix(), part.blue.get_prefix_output())])
-        self.nr_merged_states_total += len(part.full_mapping) - len(part.red_mapping)
-        self.nr_merged_states += 1
-        self.print_status()
-
-    @min_lvl(1)
-    def learning_done(self, red_states, start_time):
-        print(f'\nLearning Time: {round(time.time() - start_time, 2)}')
-        print(f'Learned {len(red_states)} state automaton via {self.nr_merged_states} merges.')
-        if 2 < self.lvl:
-            self.instance.root.visualize("model",self.instance.output_behavior)
 
 class GeneralizedStateMerging:
     def __init__(self, data, *,
-                 output_behavior : OutputBehavior = "moore",
-                 transition_behavior : TransitionBehavior = "deterministic",
-                 compatibility_behavior : CompatibilityBehavior = "partition",
-                 score_calc : ScoreCalculation = None,
-                 eval_compat_on_pta : bool = False,
-                 node_order : Callable[[Node, Node], bool] = None,
-                 consider_all_blue_states = False,
-                 depth_first = False,
-                 debug_lvl = 0):
+                 output_behavior: OutputBehavior = "moore",
+                 transition_behavior: TransitionBehavior = "deterministic",
+                 compatibility_behavior: CompatibilityBehavior = "partition",
+                 score_calc: ScoreCalculation = None,
+                 eval_compat_on_pta: bool = False,
+                 node_order: Callable[[GsmNode, GsmNode], bool] = None,
+                 consider_all_blue_states=False,
+                 depth_first=False,
+                 debug_lvl=0):
         self.eval_compat_on_pta = eval_compat_on_pta
         self.data = data
         self.debug = DebugInfoGSM(debug_lvl, self)
 
         if output_behavior not in OutputBehaviorRange:
             raise ValueError(f"invalid output behavior {output_behavior}")
-        self.output_behavior : OutputBehavior = output_behavior
+        self.output_behavior: OutputBehavior = output_behavior
         if transition_behavior not in TransitionBehaviorRange:
             raise ValueError(f"invalid transition behavior {transition_behavior}")
-        self.transition_behavior : TransitionBehavior = transition_behavior
+        self.transition_behavior: TransitionBehavior = transition_behavior
         if compatibility_behavior not in CompatibilityBehaviorRange:
             raise ValueError(f"invalid compatibility behavior {compatibility_behavior}")
-        self.compatibility_behavior : CompatibilityBehavior = compatibility_behavior
+        self.compatibility_behavior: CompatibilityBehavior = compatibility_behavior
 
         if score_calc is None:
-            if transition_behavior == "deterministic" :
+            if transition_behavior == "deterministic":
                 score_calc = ScoreCalculation()
-            elif transition_behavior == "nondeterministic" :
+            elif transition_behavior == "nondeterministic":
                 score_calc = NoRareEventNonDetScore(0.5, 0.001)
-            elif transition_behavior == "stochastic" :
+            elif transition_behavior == "stochastic":
                 score_calc = ScoreCalculation(hoeffding_compatibility(0.005, self.eval_compat_on_pta))
-        self.score_calc : ScoreCalculation = score_calc
+        self.score_calc: ScoreCalculation = score_calc
 
         if node_order is None:
-            node_order = Node.__lt__
-        self.node_order = functools.cmp_to_key(lambda a, b: -1 if node_order(a,b) else 1)
+            node_order = GsmNode.__lt__
+        self.node_order = functools.cmp_to_key(lambda a, b: -1 if node_order(a, b) else 1)
 
         self.consider_all_blue_states = consider_all_blue_states
         self.depth_first = depth_first
 
         pta_construction_start = time.time()
-        self.root: Node
-        if isinstance(data, Node):
+        self.root: GsmNode
+        if isinstance(data, GsmNode):
             self.root = data
         else:
-            self.root = Node.createPTA(data, output_behavior)
+            self.root = GsmNode.createPTA(data, output_behavior)
 
         self.debug.pta_construction_done(pta_construction_start)
 
@@ -143,10 +72,10 @@ class GeneralizedStateMerging:
             if not self.root.is_deterministic():
                 raise ValueError("required deterministic automaton but input data is nondeterministic")
 
-    def compute_local_compatibility(self, a : Node, b : Node):
-        if self.output_behavior == "moore" and not Node.moore_compatible(a,b):
+    def compute_local_compatibility(self, a: GsmNode, b: GsmNode):
+        if self.output_behavior == "moore" and not GsmNode.moore_compatible(a, b):
             return False
-        if self.transition_behavior == "deterministic" and not Node.deterministic_compatible(a,b):
+        if self.transition_behavior == "deterministic" and not GsmNode.deterministic_compatible(a, b):
             return False
         return self.score_calc.local_compatibility(a, b)
 
@@ -156,7 +85,7 @@ class GeneralizedStateMerging:
         # sorted list of states already considered
         red_states = [self.root]
 
-        partition_candidates : Dict[Tuple[Node, Node], Partitioning] = dict()
+        partition_candidates: Dict[Tuple[GsmNode, GsmNode], Partitioning] = dict()
         while True:
             # get blue states
             blue_states = []
@@ -181,7 +110,7 @@ class GeneralizedStateMerging:
                 # FUTURE: Save partitions?
 
                 # calculate partitions resulting from merges with red states if necessary
-                current_candidates : Dict[Node, Partitioning] = dict()
+                current_candidates: Dict[GsmNode, Partitioning] = dict()
                 perfect_partitioning = None
                 for red_state in red_states:
                     partition = partition_candidates.get((red_state, blue_state))
@@ -194,7 +123,7 @@ class GeneralizedStateMerging:
 
                 # partition with perfect score found: don't consider anything else
                 if perfect_partitioning:
-                    partition_candidates = {(red_state, blue_state) : perfect_partitioning}
+                    partition_candidates = {(red_state, blue_state): perfect_partitioning}
                     break
 
                 # no merge candidates for this blue state -> promote
@@ -205,7 +134,8 @@ class GeneralizedStateMerging:
                     break
 
                 # update tracking dict with new candidates
-                new_candidates = (((red, blue_state), part) for red, part in current_candidates.items() if part.score is not False)
+                new_candidates = (((red, blue_state), part) for red, part in current_candidates.items() if
+                                  part.score is not False)
                 partition_candidates.update(new_candidates)
 
             # a state was promoted -> don't clear candidates
@@ -213,7 +143,7 @@ class GeneralizedStateMerging:
                 continue
 
             # find best partitioning and clear candidates
-            best_candidate = max(partition_candidates.values(), key = lambda part : part.score)
+            best_candidate = max(partition_candidates.values(), key=lambda part: part.score)
             # FUTURE: optimizations for compatibility tests where merges can be orthogonal
             # FUTURE: caching for aggregating compatibility tests
             partition_candidates.clear()
@@ -225,8 +155,8 @@ class GeneralizedStateMerging:
 
         return self.root.to_automaton(self.output_behavior, self.transition_behavior)
 
-    def _check_futures(self, red: Node, blue: Node) -> bool:
-        q : deque[Tuple[Node, Node]] = deque([(red, blue)])
+    def _check_futures(self, red: GsmNode, blue: GsmNode) -> bool:
+        q: deque[Tuple[GsmNode, GsmNode]] = deque([(red, blue)])
         pop = q.pop if self.depth_first else q.popleft
 
         while len(q) != 0:
@@ -250,7 +180,7 @@ class GeneralizedStateMerging:
 
         return True
 
-    def _partition_from_merge(self, red: Node, blue: Node) -> Partitioning :
+    def _partition_from_merge(self, red: GsmNode, blue: Optional[GsmNode]) -> Partitioning:
         # Compatibility check based on partitions.
         # assumes that blue is a tree and red is not reachable from blue
 
@@ -264,10 +194,10 @@ class GeneralizedStateMerging:
 
         # when compatibility is determined only by future and scores are disabled, we need not create partitions.
         if self.compatibility_behavior == "future" and not self.score_calc.has_score_function():
-            def update_partition(red_node: Node, blue_node: Node) -> Node:
+            def update_partition(red_node: GsmNode, blue_node: GsmNode) -> GsmNode:
                 return red_node
         else:
-            def update_partition(red_node: Node, blue_node: Node) -> Node:
+            def update_partition(red_node: GsmNode, blue_node: GsmNode) -> GsmNode:
                 if red_node not in partitioning.full_mapping:
                     p = red_node.shallow_copy()
                     partitioning.full_mapping[red_node] = p
@@ -283,7 +213,7 @@ class GeneralizedStateMerging:
         blue_in_sym, blue_out_sym = blue.prefix_access_pair
         blue_parent.transitions[blue_in_sym][blue_out_sym].target = red
 
-        q : deque[Tuple[Node, Node]] = deque([(red, blue)])
+        q: deque[Tuple[GsmNode, GsmNode]] = deque([(red, blue)])
         pop = q.pop if self.depth_first else q.popleft
 
         while len(q) != 0:
@@ -312,24 +242,24 @@ class GeneralizedStateMerging:
 
 # TODO nicer interface?
 def run_GSM(data, *,
-            output_behavior : OutputBehavior = "moore",
-            transition_behavior : TransitionBehavior = "deterministic",
-            compatibility_behavior : CompatibilityBehavior = "partition",
-            score_calc : ScoreCalculation = None,
-            eval_compat_on_pta : bool = False,
-            node_order : Callable[[Node, Node], bool] = None,
-            consider_all_blue_states = False,
-            depth_first = False,
-            debug_lvl = 0):
+            output_behavior: OutputBehavior = "moore",
+            transition_behavior: TransitionBehavior = "deterministic",
+            compatibility_behavior: CompatibilityBehavior = "partition",
+            score_calc: ScoreCalculation = None,
+            eval_compat_on_pta: bool = False,
+            node_order: Callable[[GsmNode, GsmNode], bool] = None,
+            consider_all_blue_states=False,
+            depth_first=False,
+            debug_lvl=0):
     return GeneralizedStateMerging(**locals()).run()
 
 
-def run_GSM_Alergia(data, output_behavior : OutputBehavior = "moore",
-                epsilon : float = 0.005,
-                compatibility_behavior : CompatibilityBehavior = "future",
-                eval_compat_on_pta=True,
-                global_score=None,
-                **kwargs) :
+def run_GSM_Alergia(data, output_behavior: OutputBehavior = "moore",
+                    epsilon: float = 0.005,
+                    compatibility_behavior: CompatibilityBehavior = "future",
+                    eval_compat_on_pta=True,
+                    global_score=None,
+                    **kwargs):
     return GeneralizedStateMerging(
         data,
         output_behavior=output_behavior,
@@ -340,7 +270,8 @@ def run_GSM_Alergia(data, output_behavior : OutputBehavior = "moore",
         **kwargs
     ).run()
 
-def run_GSM_RPNI(data, output_behavior : OutputBehavior = "moore", *args, **kwargs):
+
+def run_GSM_RPNI(data, output_behavior: OutputBehavior = "moore", *args, **kwargs):
     return GeneralizedStateMerging(
         data,
         output_behavior=output_behavior,
