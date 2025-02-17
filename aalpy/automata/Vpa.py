@@ -156,7 +156,7 @@ class Vpa(Automaton):
         # ensure prefixes are computed
         # self.compute_prefixes()
 
-        sorted_states = sorted(self.states, key=lambda x: len(x.prefix))
+        sorted_states = sorted(self.states, key=lambda x: len(x.prefix) if x.prefix is not None else len(self.states))
         for s in sorted_states:
             state_setup_dict[s.state_id] = (
                 s.is_accepting, {k: (v.target_state.state_id, v.action) for k, v in s.transitions.items()})
